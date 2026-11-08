@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+.DS_Store
+# Keep captures small (under ~5 MB each). Never commit captures containing real personal data.
+
+.venv/
