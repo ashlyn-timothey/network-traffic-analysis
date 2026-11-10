@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+.env
+.env.*
+!.env.example
+.DS_Store
+# Keep captures small (under ~5 MB each). Never commit captures containing real personal data.
+
+.venv/
+venv/
+.streamlit/secrets.toml
+**/secrets.toml
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.sqlite-*
+*.db-*
+/data/backups/
+*.pcap
+*.pcapng
+*.pdf
