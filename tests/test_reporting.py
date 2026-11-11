@@ -207,7 +207,7 @@ def test_long_notes_and_finding_descriptions_flow_across_pages(store):
     long_finding = report_data()["findings"][0]
     long_finding["reason"] = "Long evidence-based explanation. " * 900
     investigation_id = create_investigation(store, findings=[long_finding])
-    store.update_notes(investigation_id, "Long analyst note. " * 2500)
+    store.update_notes(investigation_id, "Long analyst note. " * 1000)
 
     reader, text = read_pdf(
         generate_investigation_report(store.get_investigation(investigation_id))

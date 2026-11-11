@@ -19,6 +19,7 @@ from network_traffic_analysis.investigations import (
     DEFAULT_DATABASE_PATH,
     DuplicateInvestigation,
     FINDING_DISPOSITIONS,
+    MAX_ANALYST_NOTES_LENGTH,
     MAX_CONCLUSION_LENGTH,
     MAX_FINDING_REASONING_LENGTH,
     INVESTIGATION_STATUSES,
@@ -288,6 +289,17 @@ def _render_evidence_reviews(findings, investigation_id):
                     "and unavailable."
                 )
                 continue
+            evidence_index = evidence.get("evidence_index", index)
+            if (
+                not isinstance(evidence_index, int)
+                or isinstance(evidence_index, bool)
+                or evidence_index < 0
+            ):
+                st.warning(
+                    f"Finding {finding_id}, evidence {index + 1} has an invalid "
+                    "stored index and cannot be reviewed."
+                )
+                continue
             available_evidence += 1
             reviewed = evidence.get("review_status") == "Reviewed"
             status = "Reviewed" if reviewed else "Not Reviewed"
@@ -316,11 +328,14 @@ def _render_evidence_reviews(findings, investigation_id):
                     )
                 if st.button(
                     "Mark Not Reviewed" if reviewed else "Mark Reviewed",
-                    key=f"evidence_review_{investigation_id}_{finding_id}_{index}",
+                    key=(
+                        f"evidence_review_{investigation_id}_{finding_id}_"
+                        f"{evidence_index}"
+                    ),
                 ):
                     try:
                         store.update_evidence_review(
-                            investigation_id, finding_id, index, not reviewed
+                            investigation_id, finding_id, evidence_index, not reviewed
                         )
                     except (
                         FindingNotFound,
@@ -654,6 +669,9 @@ elif section == "Investigation Details":
                     "Analyst notes",
                     value=investigation["analyst_notes"],
                     height=160,
+                )
+                st.caption(
+                    f"{len(notes):,} / {MAX_ANALYST_NOTES_LENGTH:,} characters"
                 )
                 save_notes = st.form_submit_button("Save notes")
             if save_notes:

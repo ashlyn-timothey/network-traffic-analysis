@@ -6,6 +6,7 @@ import pytest
 from network_traffic_analysis.investigations import (
     DuplicateInvestigation,
     FINDING_DISPOSITIONS,
+    MAX_ANALYST_NOTES_LENGTH,
     MAX_CONCLUSION_LENGTH,
     INVESTIGATION_STATUSES,
     FindingNotFound,
@@ -162,6 +163,39 @@ def test_save_and_retrieve_notes(store):
 
     assert store.get_investigation(investigation_id)["analyst_notes"] == notes
     assert store.get_investigation(investigation_id)["updated_at"]
+
+
+def test_analyst_notes_length_is_bounded_without_truncating_existing_notes(
+    store,
+):
+    investigation_id = create_sample(store)
+    maximum_notes = "n" * MAX_ANALYST_NOTES_LENGTH
+    store.update_notes(investigation_id, maximum_notes)
+    assert store.get_investigation(investigation_id)["analyst_notes"] == maximum_notes
+
+    over_limit_notes = maximum_notes + "existing"
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute(
+            "UPDATE investigations SET analyst_notes = ? WHERE id = ?",
+            (over_limit_notes, investigation_id),
+        )
+
+    before = store.get_investigation(investigation_id)
+    assert before["analyst_notes"] == over_limit_notes
+
+    store.update_notes(investigation_id, over_limit_notes)
+    with pytest.raises(ValueError, match="analyst notes must be at most"):
+        store.update_notes(investigation_id, over_limit_notes + " edited")
+
+    after = store.get_investigation(investigation_id)
+    assert after["analyst_notes"] == over_limit_notes
+    assert after["updated_at"] == before["updated_at"]
+
+    store.update_notes(investigation_id, "Shortened without losing prior data.")
+    assert (
+        store.get_investigation(investigation_id)["analyst_notes"]
+        == "Shortened without losing prior data."
+    )
 
 
 def test_status_and_notes_advance_updated_at(store, monkeypatch):
@@ -553,11 +587,11 @@ def test_evidence_review_status_persists_without_changing_packet_metadata(store)
     assert {
         key: value
         for key, value in reviewed["evidence"][0].items()
-        if key not in {"review_status", "reviewed_at"}
+        if key not in {"evidence_index", "review_status", "reviewed_at"}
     } == {
         key: value
         for key, value in original["evidence"][0].items()
-        if key not in {"review_status", "reviewed_at"}
+        if key not in {"evidence_index", "review_status", "reviewed_at"}
     }
 
     reopened.update_evidence_review(investigation_id, finding_id, 0, False)
@@ -569,6 +603,43 @@ def test_evidence_review_status_persists_without_changing_packet_metadata(store)
     )
     with pytest.raises(ValueError, match="missing or malformed"):
         store.update_evidence_review(investigation_id, finding_id, 9, True)
+
+
+def test_malformed_evidence_does_not_shift_review_indexes(store):
+    investigation_id = create_sample(store)
+    finding = store.get_investigation(investigation_id)["findings"][0]
+    finding_id = finding["finding_id"]
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute(
+            "UPDATE findings SET evidence_json = ? WHERE id = ?",
+            (
+                '[{"packet_number":"invalid"},{"packet_number":2,'
+                '"timestamp":1700000001.0,"source_ip":"192.0.2.10"}]',
+                finding_id,
+            ),
+        )
+
+    visible = store.get_investigation(investigation_id)["findings"][0]["evidence"]
+    assert len(visible) == 1
+    assert visible[0]["packet_number"] == 2
+    assert visible[0]["evidence_index"] == 1
+
+    store.update_evidence_review(
+        investigation_id, finding_id, visible[0]["evidence_index"], True
+    )
+
+    reviewed = store.get_investigation(investigation_id)["findings"][0]["evidence"]
+    assert len(reviewed) == 1
+    assert reviewed[0]["packet_number"] == 2
+    assert reviewed[0]["evidence_index"] == 1
+    assert reviewed[0]["review_status"] == "Reviewed"
+    assert reviewed[0]["reviewed_at"]
+    with sqlite3.connect(store.database_path) as connection:
+        review_rows = connection.execute(
+            "SELECT evidence_index, reviewed FROM evidence_reviews WHERE finding_id = ?",
+            (finding_id,),
+        ).fetchall()
+    assert [tuple(row) for row in review_rows] == [(1, 1)]
 
 
 def test_activity_history_records_actions_in_chronological_order(store):

@@ -8,6 +8,7 @@ from network_traffic_analysis import (
     DetectionThresholds,
     analyze_bytes,
 )
+from network_traffic_analysis.investigations import InvestigationStore
 from test_pcap_summary import (
     MAC_A,
     MAC_B,
@@ -26,6 +27,31 @@ from test_pcap_summary import (
 def icmp_frame(src, dst, icmp_type=8, code=0):
     icmp = struct.pack("!BBHI", icmp_type, code, 0, 1)
     return eth(MAC_B, MAC_A, 0x0800, ipv4(src, dst, 1, icmp))
+
+
+def dns_query_frame(question, question_count=1):
+    dns = struct.pack("!HHHHHH", 1, 0x0100, question_count, 0, 0, 0) + question
+    udp = struct.pack("!HHHH", 5353, 53, 8 + len(dns), 0) + dns
+    return eth(
+        MAC_B,
+        MAC_A,
+        0x0800,
+        ipv4("10.0.0.9", "10.0.0.2", 17, udp),
+    )
+
+
+def dns_question(labels, *, qtype_class=b"\x00\x01\x00\x01"):
+    return (
+        b"".join(bytes([len(label)]) + label for label in labels)
+        + b"\x00"
+        + qtype_class
+    )
+
+
+def analyze_dns_question(tmp_path, question):
+    capture_path = tmp_path / "dns-question.pcap"
+    write_pcap(str(capture_path), [dns_query_frame(question)])
+    return analyze_bytes(capture_path.read_bytes())
 
 
 @pytest.mark.parametrize(
@@ -109,6 +135,60 @@ def test_rejects_truncated_pcap_record():
 
     with pytest.raises(CaptureError, match="truncated PCAP packet data"):
         analyze_bytes(header + record)
+
+
+def test_dns_query_name_accepts_wire_length_boundary(tmp_path):
+    labels = [b"a" * 63, b"b" * 63, b"c" * 63, b"d" * 61]
+    name = ".".join(label.decode() for label in labels)
+    report = analyze_dns_question(tmp_path, dns_question(labels))
+
+    assert len(name.encode()) == 253
+    assert report["top_dns_queries"] == [(name, 1)]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        dns_question([b"a" * 64]),
+        dns_question([b"a" * 63, b"b" * 63, b"c" * 63, b"d" * 62]),
+        dns_question([b"valid"], qtype_class=b"\x00\x01"),
+        b"\x40" + b"x" * 64 + b"\x00\x00\x01\x00\x01",
+        b"\x03ab",
+        b"\x03a\x01\x00\x00\x01\x00\x01",
+    ],
+)
+def test_malformed_dns_question_is_ignored_safely(tmp_path, question):
+    report = analyze_dns_question(tmp_path, question)
+
+    assert report["protocols"] == {"UDP": 1}
+    assert report["top_dns_queries"] == []
+    assert report["findings"] == []
+
+
+def test_truncated_additional_dns_question_is_ignored(tmp_path):
+    capture_path = tmp_path / "dns-question.pcap"
+    write_pcap(
+        str(capture_path),
+        [dns_query_frame(dns_question([b"valid"]), question_count=2)],
+    )
+    report = analyze_bytes(capture_path.read_bytes())
+
+    assert report["top_dns_queries"] == []
+
+
+def test_malformed_dns_does_not_prevent_investigation_save(tmp_path):
+    report = analyze_dns_question(
+        tmp_path,
+        dns_question([b"a" * 63, b"b" * 63, b"c" * 63, b"d" * 62]),
+    )
+    store = InvestigationStore(tmp_path / "investigations.sqlite3")
+    store.initialize()
+
+    investigation_id = store.create_investigation(
+        "Malformed DNS capture", "malformed.pcap", report
+    )
+
+    assert store.get_investigation(investigation_id)["findings"] == []
 
 
 def test_rejects_invalid_pcapng_block_trailer(tmp_path):

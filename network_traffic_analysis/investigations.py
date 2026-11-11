@@ -22,6 +22,7 @@ FINDING_DISPOSITIONS = (
 )
 MAX_CONCLUSION_LENGTH = 10_000
 MAX_FINDING_REASONING_LENGTH = 4_000
+MAX_ANALYST_NOTES_LENGTH = 20_000
 MAX_EVIDENCE_PER_FINDING = 25
 SCHEMA_VERSION = 2
 _INVESTIGATION_COLUMNS = {
@@ -630,7 +631,12 @@ class InvestigationStore:
         clean_id = _validate_id(investigation_id)
         if not isinstance(notes, str):
             raise ValueError("analyst notes must be text")
-        self._update_field(clean_id, "analyst_notes", notes)
+        self._update_field(
+            clean_id,
+            "analyst_notes",
+            notes,
+            max_length=MAX_ANALYST_NOTES_LENGTH,
+        )
 
     def update_conclusion(self, investigation_id: str, conclusion: str) -> None:
         clean_id = _validate_id(investigation_id)
@@ -861,7 +867,14 @@ class InvestigationStore:
                 f"Could not delete investigation: {exc}"
             ) from exc
 
-    def _update_field(self, investigation_id: str, field: str, value: str) -> None:
+    def _update_field(
+        self,
+        investigation_id: str,
+        field: str,
+        value: str,
+        *,
+        max_length: int | None = None,
+    ) -> None:
         field_events = {
             "status": ("status_changed", f"Investigation status changed to {value}."),
             "analyst_notes": ("notes_updated", "Analyst notes updated."),
@@ -883,6 +896,10 @@ class InvestigationStore:
                     raise InvestigationNotFound("investigation was not found")
                 if current[field] == value:
                     return
+                if max_length is not None and len(value) > max_length:
+                    raise ValueError(
+                        f"analyst notes must be at most {max_length} characters"
+                    )
                 occurred_at = utc_now()
                 cursor = connection.execute(
                     f"UPDATE investigations SET {field} = ?, updated_at = ? "
@@ -1289,6 +1306,7 @@ def _finding_from_row(
                     "One or more stored packet evidence entries are malformed."
                 )
                 continue
+            safe_item["evidence_index"] = index
             review = (evidence_reviews or {}).get(index, {})
             safe_item["review_status"] = (
                 "Reviewed" if review.get("reviewed") else "Not Reviewed"

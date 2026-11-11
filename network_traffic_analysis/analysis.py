@@ -278,21 +278,44 @@ def analyze_bytes(
 
 
 def parse_dns_qname(payload: bytes) -> str | None:
-    """Return the first uncompressed question name from a DNS query, if present."""
-    if len(payload) < 13 or payload[2] & 0x80:
+    """Return the first complete, bounded uncompressed question name, if present."""
+    if len(payload) < 12 or payload[2] & 0x80:
         return None
     question_count = struct.unpack("!H", payload[4:6])[0]
     if question_count == 0:
         return None
 
-    labels = []
     position = 12
-    while position < len(payload):
-        length = payload[position]
-        if length == 0:
-            return ".".join(labels).lower() or None
-        if length > 63 or length & 0xC0 or position + 1 + length > len(payload):
+    first_name = None
+    for question_index in range(question_count):
+        labels = []
+        wire_length = 1  # Include the terminal root label.
+        while position < len(payload):
+            label_length = payload[position]
+            position += 1
+            if label_length == 0:
+                break
+            if (
+                label_length > 63
+                or label_length & 0xC0
+                or position + label_length > len(payload)
+            ):
+                return None
+            wire_length += label_length + 1
+            if wire_length > 255:
+                return None
+            label = payload[position : position + label_length]
+            if any(byte < 0x20 or byte == 0x7F for byte in label):
+                return None
+            labels.append(label.decode("ascii", "replace"))
+            position += label_length
+        else:
             return None
-        labels.append(payload[position + 1 : position + 1 + length].decode("ascii", "replace"))
-        position += 1 + length
-    return None
+
+        if position + 4 > len(payload):
+            return None
+        position += 4  # QTYPE and QCLASS.
+        if question_index == 0:
+            first_name = ".".join(labels).lower() or None
+
+    return first_name

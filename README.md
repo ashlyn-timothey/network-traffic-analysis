@@ -84,6 +84,9 @@ All findings are descriptive triage hypotheses, not verdicts. Severity and
 confidence communicate review priority and evidence strength, not a calibrated
 probability of compromise. Validate rules against controlled positive and
 negative captures and the local environment before operational use.
+DNS question extraction is limited to complete, uncompressed names that meet
+the wire-format limits (63 bytes per label and 255 encoded bytes per name);
+malformed or incomplete question records are ignored.
 
 ## Tests
 
@@ -149,7 +152,9 @@ Use the dashboard sections to:
 4. Change status (Open, In Progress, Resolved), save an analyst conclusion and
    notes, and review each finding as Needs Review, True Positive, False
    Positive, or Inconclusive. Analyst reasoning and review time are stored
-   separately from the original automated detection.
+   separately from the original automated detection. Analyst notes are limited
+   to 20,000 characters; longer existing notes remain intact and can be shortened
+   before saving further changes.
 5. Mark individual bounded packet evidence Reviewed or Not Reviewed. Review
    status does not alter the stored packet metadata. Investigation changes are
    recorded in chronological activity history.
